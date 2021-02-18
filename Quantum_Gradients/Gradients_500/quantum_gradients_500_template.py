@@ -32,7 +32,54 @@ def natural_gradient(params):
     natural_grad = np.zeros(6)
 
     # QHACK #
+    s = 0.1
+    gradient = np.zeros([6], dtype=np.float64)
 
+    for i in range(6):
+        params[i] += s
+        plus_s = qnode(params)
+        params[i] -= 2*s
+        minus_s = qnode(params)
+        gradient[i] = (plus_s - minus_s) / (2*np.sin(s))
+        params[i] += s
+
+
+    @qml.qnode(dev)
+    def my_qnode(params):
+        variational_circuit(params)
+        return qml.state()
+
+    s = np.pi/2
+
+    ket_state = my_qnode(params)
+    bra_state = np.conj(ket_state)
+
+    F = np.zeros([6, 6], dtype=np.float64)
+
+    def get_F(qnode, params):
+        for i in range(6):
+            for j in range(6):
+                params[i] += s
+                params[j] += s
+                pp_state = qnode(params)
+                pp = np.abs(np.dot(bra_state, pp_state)) ** 2
+                params[j] -= 2*s
+                pm_state = qnode(params)
+                pm = np.abs(np.dot(bra_state, pm_state)) ** 2
+                params[i] -= 2*s
+                params[j] += 2*s
+                mp_state = qnode(params)
+                mp = np.abs(np.dot(bra_state, mp_state)) ** 2
+                params[j] -= 2*s
+                mm_state = qnode(params)
+                mm = np.abs(np.dot(bra_state, mm_state)) ** 2
+                F[i,j] = (-pp + pm + mp - mm) / 8
+                params[i] += s
+                params[j] += s
+
+    get_F(my_qnode, params)
+    
+    natural_grad = np.matmul(np.linalg.inv(F), gradient)
     # QHACK #
 
     return natural_grad
