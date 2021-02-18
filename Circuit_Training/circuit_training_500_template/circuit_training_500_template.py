@@ -3,7 +3,6 @@
 import sys
 import pennylane as qml
 import numpy as np
-from matplotlib import pyplot as plt
 
 def classify_data(X_train, Y_train, X_test):
     """Develop and train your very own variational quantum classifier.
