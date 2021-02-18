@@ -21,7 +21,8 @@ def variational_ansatz(params, wires):
     """
 
     # QHACK #
-
+    for i in range(len(wires)):
+        qml.PauliX(wires=[i])
     # QHACK #
 
 

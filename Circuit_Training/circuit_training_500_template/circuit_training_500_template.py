@@ -27,57 +27,17 @@ def classify_data(X_train, Y_train, X_test):
 
     # Use this array to make a prediction for the labels of the data in X_test
     predictions = []
-    y_test = np.array([1,0,-1,0,-1,1,-1,-1,0,-1,1,-1,0,1,0,-1,-1,0,0,1,1,0,-1,0,0,-1,0,-1,0,0,1,1,-1,-1,-1,0,-1,0,1,0,-1,1,1,0,-1,-1,-1,-1,0,0])
 
     # QHACK #
-    dev = qml.device('default.qubit', wires=2)
-
-    def get_angles(x):
-
-        beta0 = 2 * np.arcsin(np.sqrt(x[1] ** 2) / np.sqrt(x[0] ** 2 + x[1] ** 2 + 1e-12))
-        beta1 = 2 * np.arcsin(np.sqrt(x[3] ** 2) / np.sqrt(x[2] ** 2 + x[3] ** 2 + 1e-12))
-        beta2 = 2 * np.arcsin(
-            np.sqrt(x[2] ** 2 + x[3] ** 2)
-            / np.sqrt(x[0] ** 2 + x[1] ** 2 + x[2] ** 2 + x[3] ** 2)
-        )
-
-        return np.array([beta2, -beta1 / 2, beta1 / 2, -beta0 / 2, beta0 / 2])
-
-
-    def statepreparation(a):
-        qml.RY(a[0], wires=0)
-
-        qml.CNOT(wires=[0, 1])
-        qml.RY(a[1], wires=1)
-        qml.CNOT(wires=[0, 1])
-        qml.RY(a[2], wires=1)
-
-        qml.PauliX(wires=0)
-        qml.CNOT(wires=[0, 1])
-        qml.RY(a[3], wires=1)
-        qml.CNOT(wires=[0, 1])
-        qml.RY(a[4], wires=1)
-        qml.PauliX(wires=0)
-
-    def layer(W):
-        qml.Rot(W[0, 0], W[0, 1], W[0, 2], wires=0)
-        qml.Rot(W[1, 0], W[1, 1], W[1, 2], wires=1)
-        qml.CNOT(wires=[0, 1])
-
+    dev = qml.device("default.qubit", wires=1)
+    
     @qml.qnode(dev)
-    def circuit(weights, angles):
-        statepreparation(angles)
-
-        for W in weights:
-            layer(W)
-
+    def variational_classifier(weights, x):
+        for w in weights:
+            qml.Rot(*x,wires=0)
+            qml.Rot(*w,wires=0)
+        # return qml.expval(qml.Hermitian(y, wires=[0]))
         return qml.expval(qml.PauliZ(0))
-
-
-    def variational_classifier(var, angles):
-        weights = var[0]
-        bias = var[1]
-        return circuit(weights, angles) + bias
 
     def square_loss(labels, predictions):
         loss = 0
@@ -87,40 +47,33 @@ def classify_data(X_train, Y_train, X_test):
         loss = loss / len(labels)
         return loss
 
-    def cost(weights, features, labels):
-        predictions = [variational_classifier(weights, f) for f in features]
-        return square_loss(labels, predictions)
+    def cost(var, X, Y):
+        predictions = [variational_classifier(var, x) for x in X]
+        return square_loss(Y, predictions)
 
-    for X in [X_train, X_test]:
-        padding = 0.3 * np.ones((len(X), 1))
-        X_pad = np.c_[np.c_[X, padding], np.zeros((len(X), 1))]
+    num_layers = 3
+    weights = np.random.uniform(size=(num_layers, 3))
 
-        normalization = np.sqrt(np.sum(X_pad ** 2, -1))
-        X_norm = (X_pad.T / normalization).T
+    steps = 100
+    batch_size = 25
+    opt = qml.AdamOptimizer(0.1)
 
-        X = X_norm
+    np.random.seed(0)
+    for i in range(steps):
+        batch_index = np.random.randint(0, len(X_train), (batch_size,))
+        X_batch = X_train[batch_index]
+        Y_batch = Y_train[batch_index]
 
-    features = np.array([get_angles(np.append(x,0)) for x in X_train])
-    test_features = np.array([get_angles(np.append(x,0)) for x in X_test])
+        weights = opt.step(lambda weights: cost(weights, X_batch, Y_batch), weights)
 
-    num_qubits = 2
-    num_layers = 6
-    var_init = (0.01 * np.random.randn(num_layers, num_qubits, 3), 0.0)
-
-    opt = qml.AdamOptimizer(0.01)
-    batch_size = 5
-
-    # train the variational classifier
-    var = var_init
-    for it in range(60):
-
-        # Update the weights by one optimizer step
-        batch_index = np.random.randint(0, len(Y_train), (batch_size,))
-        feats_train_batch = features[batch_index]
-        Y_train_batch = Y_train[batch_index]
-        var = opt.step(lambda v: cost(v, feats_train_batch, Y_train_batch), var)
-
-    predictions = [np.round(np.sqrt(variational_classifier(var, f))) for f in test_features]
+    predictions = [variational_classifier(weights, x) for x in X_test]
+    for i in range(len(X_test)):
+        if predictions[i] < -0.5:
+            predictions[i] = -1
+        elif predictions[i] > 0.5:
+            predictions[i] = 1
+        else:
+            predictions[i] = 0
     # QHACK #
 
     return array_to_concatenated_string(predictions)

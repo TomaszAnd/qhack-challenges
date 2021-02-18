@@ -22,7 +22,7 @@ def find_excited_states(H):
     energies = np.zeros(3)
 
     # QHACK #
-
+    
     # QHACK #
 
     return ",".join([str(E) for E in energies])
