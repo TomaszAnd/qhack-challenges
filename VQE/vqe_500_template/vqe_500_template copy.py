@@ -23,24 +23,27 @@ def find_excited_states(H):
     energies = np.zeros(3)
 
     # QHACK #
-    dev = qml.device("default.qubit", wires=range(len(H.wires)))
+    
+    w1 = range(len(H.wires))
+    w2 = range(len(H.wires))
+    dev = qml.device('default.qubit', wires=H.wires)
+    dev1 = qml.device('default.qubit', wires=w1)
+    dev2 = qml.device('default.qubit', wires=w2)
 
     def variational_ansatz0(params, wires):
-        rot = params[0]
         params = params[1:]
-
         n_qubits = len(wires)
         n_rotations = len(params)
-
-        qml.RY(rot[0], wires=2)
 
         if n_rotations > 1:
             n_layers = n_rotations // n_qubits
             n_extra_rots = n_rotations - n_layers * n_qubits
+
             for layer_idx in range(n_layers):
                 layer_params = params[layer_idx * n_qubits : layer_idx * n_qubits + n_qubits, :]
                 qml.broadcast(qml.Rot, wires, pattern="single", parameters=layer_params)
                 qml.broadcast(qml.CNOT, wires, pattern="ring")
+
             extra_params = params[-n_extra_rots:, :]
             extra_wires = wires[: n_qubits - 1 - n_extra_rots : -1]
             qml.broadcast(qml.Rot, extra_wires, pattern="single", parameters=extra_params)
@@ -48,80 +51,103 @@ def find_excited_states(H):
             qml.Rot(*params[0], wires=wires[0])
 
     def variational_ansatz1(params, wires):
-        rot = params[0]
+        rot_params = params[0]
         params = params[1:]
 
         n_qubits = len(wires)
         n_rotations = len(params)
 
         qml.PauliX(wires=0)
-        qml.RY(rot[1], wires=2)
+        qml.RY(rot_params[1], wires=2)
 
         if n_rotations > 1:
             n_layers = n_rotations // n_qubits
             n_extra_rots = n_rotations - n_layers * n_qubits
+
             for layer_idx in range(n_layers):
                 layer_params = params[layer_idx * n_qubits : layer_idx * n_qubits + n_qubits, :]
                 qml.broadcast(qml.Rot, wires, pattern="single", parameters=layer_params)
                 qml.broadcast(qml.CNOT, wires, pattern="ring")
+
             extra_params = params[-n_extra_rots:, :]
             extra_wires = wires[: n_qubits - 1 - n_extra_rots : -1]
             qml.broadcast(qml.Rot, extra_wires, pattern="single", parameters=extra_params)
         else:
             qml.Rot(*params[0], wires=wires[0])
 
-    def variational_ansatz2(params, wires):
-        rot = params[0]
-        params = params[1:]
-
+    @qml.qnode(dev1)
+    def get_state(params, wires=w2):
         n_qubits = len(wires)
         n_rotations = len(params)
 
-        qml.PauliX(wires=0)
-        qml.PauliX(wires=1)
-        qml.RY(rot[2], wires=2)
-
         if n_rotations > 1:
             n_layers = n_rotations // n_qubits
             n_extra_rots = n_rotations - n_layers * n_qubits
+
             for layer_idx in range(n_layers):
                 layer_params = params[layer_idx * n_qubits : layer_idx * n_qubits + n_qubits, :]
                 qml.broadcast(qml.Rot, wires, pattern="single", parameters=layer_params)
                 qml.broadcast(qml.CNOT, wires, pattern="ring")
+
             extra_params = params[-n_extra_rots:, :]
             extra_wires = wires[: n_qubits - 1 - n_extra_rots : -1]
             qml.broadcast(qml.Rot, extra_wires, pattern="single", parameters=extra_params)
         else:
             qml.Rot(*params[0], wires=wires[0])
+        return qml.state()
+
 
     num_qubits = len(H.wires)
-    num_param_sets = (2 ** num_qubits) + 5
+    num_param_sets = (2 ** num_qubits) - 1
 
-    params = np.random.normal(0, np.pi, (num_param_sets+1, 3))
+    energy = 0
+
+    cost_fn = qml.ExpvalCost(variational_ansatz0, H, dev)
     opt = qml.AdamOptimizer(stepsize=0.1)
+    params = np.random.normal(0, np.pi, (num_param_sets+1, 3))
 
-    cost_fn0 = qml.ExpvalCost(variational_ansatz0, H, dev)
-    cost_fn1 = qml.ExpvalCost(variational_ansatz1, H, dev)
-    cost_fn2 = qml.ExpvalCost(variational_ansatz2, H, dev)
-
-    def cost_fn(params):
-         return cost_fn0(params) + 0.5*cost_fn1(params) + 0.25*cost_fn2(params)
-
-    max_iterations = 1000
-    conv_tol = 1e-04
+    conv_tol = 1e-08
+    max_iterations = 400
 
     for n in range(max_iterations):
         params, prev_energy = opt.step_and_cost(cost_fn, params)
         energy = cost_fn(params)
         conv = np.abs(energy - prev_energy)
+
         if conv <= conv_tol:
             break
 
-    energies[0] = cost_fn0(params)
-    energies[1] = cost_fn1(params)
-    energies[2] = cost_fn2(params)
+    energies[0] = energy   
 
-    energies.sort()
+    state_1 = get_state(params)
+    print(state_1)
+    
+    additional_term = np.outer(state_1, state_1) * 3
+    coeffs, ops = decompose_hamiltonian(additional_term)
+
+    new_coeffs = (H.coeffs)
+    for c in coeffs:
+        new_coeffs.append(c)
+    new_ops = (H.ops)
+    for o in ops:
+        new_ops.append(o)
+    H1 = qml.Hamiltonian(new_coeffs, new_ops)
+
+    energy1 = 0
+
+    cost_fn_1 = qml.ExpvalCost(variational_ansatz, H1, dev)
+    params1 = np.random.normal(0, np.pi, (num_param_sets, 3))
+
+    for n in range(max_iterations):
+        params1, prev_energy = opt.step_and_cost(cost_fn_1, params1)
+        energy1 = cost_fn_1(params1)
+        conv = np.abs(energy1 - prev_energy)
+
+        if conv <= conv_tol:
+            break
+
+    energies[1] = energy1   
+
     # QHACK #
 
     return ",".join([str(E) for E in energies])
